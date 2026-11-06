@@ -1,15 +1,16 @@
-"""Lean 4 integration boundary (mock for the prototype).
+"""Lean 4 kernel integration boundary.
 
 Real kernel calls need a pinned Lean 4 + mathlib revision; this module pins
 the interface shape (env-hash, artifact refs, certificate re-checking) so the
-mock can be swapped for RPC/CLI later.
+included mock adapter can be used for deterministic tests and replaced by
+RPC/CLI integration.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Callable
 
-ENV_HASH = "mock-env-hash-0000"  # prototype pin; real runs record the Lean revision
+ENV_HASH = "mock-env-hash-0000"  # deterministic test environment identifier
 
 
 @dataclass(frozen=True)
@@ -94,3 +95,29 @@ class KernelInterface:
     def discharge_batch(self, stmts: list[str]) -> dict[str, bool]:
         """Batch obligation discharge."""
         return {s: False for s in stmts}
+
+
+def replay_evidence(
+    artifact: KernelArtifact | None = None,
+    cert_record: CertificateRecord | None = None,
+    *,
+    recheck_ok: bool = False,
+) -> Evidence:
+    """Return evidence from an accepted replay or verified certificate.
+
+    Procedure-certificate replay produces certified evidence only.
+    Kernel evidence requires a verified kernel artifact.
+    """
+    from tpps.core.certificates import CertificateRecord
+    from tpps.core.evidence import Evidence, Formal
+
+    if artifact is not None and recheck_ok:
+        return Evidence(
+            formal=Formal.KERNEL,
+            kernel_system=artifact.system,
+            env_hash=artifact.env_hash,
+        )
+    if cert_record is not None and isinstance(cert_record, CertificateRecord) and cert_record.is_verified:
+        return cert_record.to_evidence()
+    return Evidence()
+
