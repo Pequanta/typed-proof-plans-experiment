@@ -5,7 +5,7 @@ from tpps.reasoning import creative as C
 from tpps.adapters import render as R
 from tpps.reasoning.creative import (CRITIC_CLASSES, Alignment, FailureCertificate,
                                      SignatureMorphism, align_by_schema, anti_unify_shapes,
-                                     backward_chain, blend, BlendRejected, classify_residual,
+                                     TypedResidual, backward_chain, blend, BlendRejected, classify_residual,
                                      propose_barrier, score_alignment)
 from tpps.core.evidence import Evidence, Formal, Reviewed
 from tpps.adapters.extract import (MISTRANSLATION_KINDS, ExtractedNode, accept,
@@ -13,7 +13,7 @@ from tpps.adapters.extract import (MISTRANSLATION_KINDS, ExtractedNode, accept,
 from tpps.reasoning.induce import (Strategy, complete_lgg, corrected_schema_name)
 from tpps.adapters.kernel import Certificate, KernelInterface, recheck
 from tpps.adapters.llm import LlmClient, admit_fragment
-from tpps.core.plan import MethodInstance, Plan, StmtNode
+from tpps.core.plan import Layer, MethodInstance, Plan, StmtNode
 from tpps.adapters.render import Register, lint_rendered, render, smooth_with_llm
 from tpps.core.schema import CondTag, Condition
 from tpps.core.stmt import App, Const, Shape, Stmt, Var
@@ -38,12 +38,18 @@ def test_abduction_residual_and_seven_critic_classes():
     assert seen == set(CRITIC_CLASSES)
 
 
+def test_typed_residual_is_canonical_and_keeps_alias():
+    r = TypedResidual(shape=Shape("NeedLemma", ()), origin_schema="S")
+    assert r.origin_schema == "S"
+    assert r.producer_schema == "S"
+
+
 def test_analogy_lgg_leaves_free_vars_and_scores():
     a = Plan("a")
     b = Plan("b")
     for pid, plan in (("a", a), ("b", b)):
         plan.add_stmt(StmtNode("s", Stmt(shape=Shape("Saturated", (Var("R"),)))))
-        plan.add_stmt(StmtNode("c", Stmt(shape=Shape("Confluent", (Var("R"),)))))
+        plan.add_stmt(StmtNode("c", Stmt(shape=Shape("Terminates", (Var("R"),)))))
         plan.add_inst(MethodInstance(f"e-{pid}", "FiniteActiveDomainSaturation",
                                      ["s"], "c"))
     al = align_by_schema(a, b)
@@ -85,7 +91,7 @@ def test_completion_provenance_and_strategy():
     lgg, _, _ = plan_a_b_lgg()
     assert "Compress(plan-a, plan-b)" in theorem6_completion().provenance
     assert "Lemma-5" in theorem6_completion().provenance
-    assert theorem6_completion().schema.obligation_templates
+    assert theorem6_completion().schema.obligation_templates == []
     s = Strategy("S", lgg, "?EstimateMethod", ["CauchyEstimate"])
     s.add_filler("MaxModulus")
     s.add_filler("MaxModulus")
@@ -118,18 +124,18 @@ def _render_plan():
 def test_renderer_deterministic_registers_and_default():
     plan, reg = _render_plan()
     req = Evidence(reviewed=Reviewed.INDEPENDENT)
-    t1 = render(plan, "confluent", req, Register.TEXTBOOK)
-    assert render(plan, "confluent", req, Register.TEXTBOOK) == t1  # byte-identical
-    ann = render(plan, "confluent", req, Register.ANNOTATED)
-    assert "Status of confluent" in ann
+    t1 = render(plan, "terminates", req, Register.TEXTBOOK)
+    assert render(plan, "terminates", req, Register.TEXTBOOK) == t1  # byte-identical
+    ann = render(plan, "terminates", req, Register.ANNOTATED)
+    assert "Status of terminates" in ann
     assert "Three facts" not in t1  # shared linearization, merged sentences not required here
     # open target defaults to annotated
-    assert "Status of" in render(plan, "confluent", req)
+    assert "Status of" in render(plan, "terminates", req)
     # closed target defaults to textbook
-    plan.stmts["confluent"].evidence = Evidence(
+    plan.stmts["terminates"].evidence = Evidence(
         formal=Formal.KERNEL, kernel_system="lean4+mathlib", env_hash="h",
         reviewed=Reviewed.TWO_INDEPENDENT)
-    assert "Status of" not in render(plan, "confluent", req)
+    assert "Status of" not in render(plan, "terminates", req)
     assert lint_rendered(t1, plan) == []
 
 
@@ -210,3 +216,81 @@ def test_commit_gate_typing_pass_and_retrieval():
     other = store.commit_gate_typing_pass(
         ["(plan other stmt n (seq [] Z))"], lambda: (True, ""))
     assert other.content_hash != rec.content_hash
+
+
+# --- Transform Boundaries ---
+def test_transform_records_applicability_provenance_and_soundness():
+    from tpps.reasoning.transform import (AuxiliaryFunction, Bypass, Compress,
+                                          Contradiction, FixPoint, GeneralizeSpecialize)
+    p = Plan("records")
+    p.add_stmt(StmtNode("s", Stmt(shape=Shape("A", (), sort="RelSpace"))))
+
+    # Bypass
+    bp = Bypass(Shape("A", (), sort="RelSpace"), Shape("B", (), sort="RelSpace"), blame="attempt-9")
+    r_bp = bp.apply(p)
+    assert r_bp is not None
+    assert r_bp.applicable is True
+    assert r_bp.blame == "attempt-9"
+    assert r_bp.provenance.producing_attempt == "attempt-9"
+    assert r_bp.soundness_reference == "Bypass-Soundness"
+    assert r_bp.obligations == ["obl-A-implies-B"]
+
+    # Contradiction
+    r_ct = Contradiction(target="s").apply(p)
+    assert r_ct is not None and r_ct.applicable is True
+    assert r_ct.soundness_reference == "Classical.byContradiction"
+    assert r_ct.obligations == ["witness-s"]
+
+    # Inapplicable returns None
+    assert Contradiction(target="missing-target").apply(p) is None
+
+
+def test_bypass_obligation_remains_open_until_discharged():
+    from tpps.reasoning.transform import Bypass, cast_evidence
+    from tpps.core.evidence import Evidence, Formal, Reviewed
+    p = Plan("bypass-open")
+    src = p.add_stmt(StmtNode("src", Stmt(shape=Shape("From", ())),
+                              evidence=Evidence(formal=Formal.KERNEL, env_hash="lean-hash", reviewed=Reviewed.INDEPENDENT)))
+    bp = Bypass(Shape("From", ()), Shape("To", ()), blame="claim-drift")
+    res = bp.apply(p)
+    assert res is not None
+
+    tgt_node = p.stmts["cast-To"]
+    obl_node = p.stmts[res.obligations[0]]
+
+    # Target statement is not proven by itself: its evidence is empty by default
+    assert tgt_node.evidence.formal is Formal.NONE
+    # Obligation is open
+    assert obl_node.evidence.formal is Formal.NONE
+
+    # cast_evidence requires both source and obligation evidence
+    derived = cast_evidence(src.evidence, obl_node.evidence)
+    assert derived.formal is Formal.NONE  # open obligation caps kernel evidence
+
+    # When obligation is discharged with formal evidence, cast_evidence unlocks it
+    obl_discharged = Evidence(formal=Formal.KERNEL, env_hash="lean-hash")
+    derived_closed = cast_evidence(src.evidence, obl_discharged)
+    assert derived_closed.formal is Formal.KERNEL
+
+
+def test_bypass_obligation_records_source_and_target_shapes():
+    from tpps.reasoning.transform import Bypass
+    p = Plan("bypass-shapes")
+    p.add_stmt(StmtNode("src", Stmt(shape=Shape("From", (Var("x"),)))))
+    result = Bypass(
+        Shape("From", (Var("x"),)), Shape("To", (Var("x"),))
+    ).apply(p)
+    assert result is not None
+    obligation = p.stmts[result.obligations[0]].stmt.shape
+    assert obligation.head == "Implies"
+    assert obligation.args == (
+        Shape("From", (Var("x"),)).term(),
+        Shape("To", (Var("x"),)).term(),
+    )
+
+
+def test_generic_extracted_candidates_are_speculative():
+    candidate = build_candidate("candidate", [_candidate().nodes[0]])
+    assert all(node.layer is Layer.SPECULATIVE
+               for node in candidate.plan.stmts.values())
+

@@ -103,9 +103,23 @@ def schema_library() -> SchemaRegistry:
                          [(CondTag.S, "strategy-independent")], obls=["EquivMultiset"]))
     reg.register(_schema("OutputSensitiveBound", ["Bound"], "Bound",
                          [(CondTag.C, "asymptotics")]))
-    reg.register(_schema("FiniteActiveDomainSaturation", ["Saturated"], "Confluent",
-                         [(CondTag.S, "no-remove")],
-                         obls=["ActiveDomainInvariant"]))
+    reg.register(MethodSchema(
+        id="FiniteActiveDomainSaturation",
+        premises=[Shape("Saturated", (Var("R"),), sort="TRS")],
+        conclusion=Shape("Terminates", (Var("R"),), sort="TRS"),
+        conditions=[
+            Condition(CondTag.S, "finite"),
+            Condition(CondTag.S, "headed-antecedents"),
+            Condition(CondTag.S, "extensional-antecedents"),
+            Condition(CondTag.S, "flat-consequents"),
+            Condition(CondTag.S, "ext-range-restricted"),
+            Condition(CondTag.S, "no-remove"),
+        ],
+        obligation_templates=[],
+        checker=lambda ctx: True,
+        elaborator="elab-FiniteActiveDomainSaturation",
+        soundness_theorem="Sound-FiniteActiveDomainSaturation",
+    ))
     for sid in SCHEMA_IDS:
         PREMISE_TABLE[sid] = list(reg.schemas[sid].premises)
     return reg

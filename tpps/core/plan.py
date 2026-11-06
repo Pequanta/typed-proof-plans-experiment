@@ -42,6 +42,16 @@ class Role:
     annotation: str = ""
 
 
+@dataclass(frozen=True)
+class TransformRecord:
+    id: str
+    kind: str
+    source: str
+    target: str
+    obligations: tuple[str, ...] = ()
+    provenance: Provenance = field(default_factory=Provenance)
+
+
 @dataclass
 class MethodInstance:
     id: str
@@ -60,14 +70,19 @@ class Plan:
         self.id = plan_id
         self.stmts: dict[str, StmtNode] = {}
         self.insts: dict[str, MethodInstance] = {}
+        self.transforms: list[TransformRecord] = []
         self.roles: list[Role] = []
 
     # -- construction --
     def add_stmt(self, node: StmtNode) -> StmtNode:
+        if node.id in self.stmts:
+            raise ValueError(f"duplicate statement id {node.id!r}")
         self.stmts[node.id] = node
         return node
 
     def add_inst(self, inst: MethodInstance) -> MethodInstance:
+        if inst.id in self.insts:
+            raise ValueError(f"duplicate instance id {inst.id!r}")
         if inst.conclusion not in self.stmts:
             raise KeyError(f"conclusion {inst.conclusion!r} not in plan")
         for p in inst.premises + inst.obligations:
@@ -75,6 +90,41 @@ class Plan:
                 raise KeyError(f"node {p!r} not in plan")
         self.insts[inst.id] = inst
         return inst
+
+    def graph_errors(self) -> list[str]:
+        """Return deterministic structural errors without mutating the plan."""
+        errors: list[str] = []
+        for transform in self.transforms:
+            for name, node_id in (("source", transform.source),
+                                  ("target", transform.target),
+                                  *[(f"obligation[{i}]", obligation)
+                                    for i, obligation
+                                    in enumerate(transform.obligations)]):
+                if node_id not in self.stmts:
+                    errors.append(
+                        f"transform {transform.id!r} {name} {node_id!r} "
+                        "does not reference a statement"
+                    )
+        for inst_id in sorted(self.insts):
+            inst = self.insts[inst_id]
+            if inst.conclusion not in self.stmts:
+                errors.append(
+                    f"instance {inst.id!r} conclusion {inst.conclusion!r} "
+                    "does not reference a statement"
+                )
+            for position, premise in enumerate(inst.premises):
+                if premise not in self.stmts:
+                    errors.append(
+                        f"instance {inst.id!r} premise[{position}] {premise!r} "
+                        "does not reference a statement"
+                    )
+            for position, obligation in enumerate(inst.obligations):
+                if obligation not in self.stmts:
+                    errors.append(
+                        f"instance {inst.id!r} obligation[{position}] "
+                        f"{obligation!r} does not reference a statement"
+                    )
+        return errors
 
     # -- committed support derivation --
     def committed_support(self, node_id: str) -> set[str]:
@@ -89,6 +139,10 @@ class Plan:
                 if inst.conclusion == cur and inst.layer is Layer.COMMITTED:
                     stack.extend(inst.premises)
                     stack.extend(inst.obligations)
+            for tr in self.transforms:
+                if tr.target == cur:
+                    stack.append(tr.source)
+                    stack.extend(tr.obligations)
         return seen
 
     def committed_cycle(self) -> list[str] | None:
@@ -167,7 +221,7 @@ class Plan:
                 concl = m.group(2) if m else ""
                 plan.add_inst(MethodInstance(iid, schema, prems, concl))
             # obl atoms carry no new structure beyond inst.obligations linkage,
-            # which the prototype re-attaches here:
+            # which is restored here:
             elif len(toks) >= 5 and toks[2] == "obl" and toks[3] in plan.insts:
                 if toks[4] not in plan.insts[toks[3]].obligations:
                     plan.insts[toks[3]].obligations.append(toks[4])
