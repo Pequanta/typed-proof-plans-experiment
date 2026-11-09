@@ -6,7 +6,9 @@ from tpps.reasoning.creative import anti_unify_shapes
 from tpps.domains import rewriting as RW
 from tpps.reasoning.induce import InformativeFailure, Strategy, complete_lgg, corrected_schema_name
 from tpps.core.plan import MethodInstance, Plan, Provenance, StmtNode
-from tpps.core.schema import CondTag, Condition, MethodSchema, SchemaRegistry, TrustRecord
+from tpps.core.schema import (CondTag, Condition, MethodSchema, SchemaRegistry,
+                              TrustRecord, TrustStatus)
+from tpps.core.trust import TrustDecision
 from tpps.core.stmt import App, Const, Shape, Stmt, Var
 
 
@@ -14,7 +16,9 @@ def example_registry() -> SchemaRegistry:
     """Rewriting library + transform stubs, promoted for committed use."""
     reg = RW.schema_library()
     for sid in reg.schemas:
-        reg.promote(sid, kernel_verified=True)
+        reg.promote(sid, decision=TrustDecision(
+            TrustStatus.KERNEL_VERIFIED, "registered kernel artifact",
+            artifact_ref=f"lean://schema/{sid}"))
     for tid in ("Bypass", "Compress", "Contradiction", "FixPoint", "AuxiliaryFunction"):
         reg.register(MethodSchema(
             id=tid, premises=[Shape("Any", (Var("x"),))],
@@ -22,7 +26,9 @@ def example_registry() -> SchemaRegistry:
             conditions=[], checker=lambda ctx: True,
             elaborator=f"elab-{tid}", soundness_theorem=f"Transform-{tid}",
             is_transform=True))
-        reg.promote(tid, kernel_verified=True)
+        reg.promote(tid, decision=TrustDecision(
+            TrustStatus.KERNEL_VERIFIED, "registered kernel artifact",
+            artifact_ref=f"lean://schema/{tid}"))
     return reg
 
 
@@ -31,11 +37,9 @@ def _saturation_plan(pid: str, active: str) -> Plan:
     r = Var("R")
     p.add_stmt(StmtNode("saturated", Stmt(shape=Shape("Saturated", (r,)))))
     p.add_stmt(StmtNode("active", Stmt(shape=Shape("ActiveDomain", (Const(active),)))))
-    p.add_stmt(StmtNode("confluent", Stmt(shape=Shape("Confluent", (r,)))))
-    p.add_stmt(StmtNode("obl-inv", Stmt(shape=Shape("ActiveDomainInvariant", (r,)))))
+    p.add_stmt(StmtNode("terminates", Stmt(shape=Shape("Terminates", (r,)))))
     p.add_inst(MethodInstance("e-fads", "FiniteActiveDomainSaturation",
-                              ["saturated"], "confluent",
-                              obligations=["obl-inv"], certificates=["no-remove"]))
+                              ["saturated"], "terminates"))
     return p
 
 
@@ -63,7 +67,7 @@ def theorem6_completion():
         lgg, bindings={}, via_lemma="Lemma-5-active-domain-invariance",
         theta_a=sa, theta_b=sb, plan_a="plan-a", plan_b="plan-b",
         conditions=[Condition(CondTag.S, "no-remove")],
-        obligation_templates=[Shape("ActiveDomainInvariant", (Var("R"),))],
+        obligation_templates=[],
         elaborator="(by (lemma active-domain ?R S0) (member GI))",
         soundness="Theorem-6-finite-active-domain-saturation")
 
@@ -78,7 +82,7 @@ def one_way_delete_schema() -> MethodSchema:
     return MethodSchema(
         id=corrected_schema_name("DeleteSaturation"),
         premises=[Shape("Saturated", (Var("R"),))],
-        conclusion=Shape("Confluent", (Var("R"),)),
+        conclusion=Shape("Terminates", (Var("R"),)),
         conditions=[Condition(CondTag.S, "lexicographic-measure",
                               "lexicographic (|{lease-active}|, |GI \\ S|)"),
                     Condition(CondTag.S, "one-way-delete")],
@@ -106,7 +110,9 @@ def complex_registry() -> SchemaRegistry:
     from .domains import complex_analysis as CA
     reg = CA.schema_library()
     for sid in reg.schemas:
-        reg.promote(sid, kernel_verified=True)
+        reg.promote(sid, decision=TrustDecision(
+            TrustStatus.KERNEL_VERIFIED, "registered kernel artifact",
+            artifact_ref=f"lean://schema/{sid}"))
     for tid in ("Bypass", "Contradiction", "FixPoint", "AuxiliaryFunction", "Liouville-CA"):
         if tid not in reg.schemas:
             reg.register(MethodSchema(
@@ -115,7 +121,9 @@ def complex_registry() -> SchemaRegistry:
                 conditions=[], checker=lambda ctx: True,
                 elaborator=f"elab-{tid}", soundness_theorem=f"Transform-{tid}",
                 is_transform=True))
-            reg.promote(tid, kernel_verified=True)
+            reg.promote(tid, decision=TrustDecision(
+                TrustStatus.KERNEL_VERIFIED, "registered kernel artifact",
+                artifact_ref=f"lean://schema/{tid}"))
     # FTA uses Liouville with 2 premises + Constant conclusion: mark transform-kind
     # so the cross-domain demo shape-checks against the same-named schema.
     liouv = reg.schemas["Liouville"]
@@ -127,7 +135,9 @@ def complex_registry() -> SchemaRegistry:
         checker=lambda ctx: True, elaborator="elab-Contradiction",
         soundness_theorem="Classical.byContradiction", is_transform=True,
         trust=TrustRecord())
-    reg.promote("Contradiction", kernel_verified=True)
+    reg.promote("Contradiction", decision=TrustDecision(
+        TrustStatus.KERNEL_VERIFIED, "registered kernel artifact",
+        artifact_ref="lean://schema/Contradiction"))
     reg.schemas["AuxiliaryFunction"] = MethodSchema(
         id="AuxiliaryFunction",
         premises=[Shape("Holo", (Var("g"),))],
@@ -135,7 +145,9 @@ def complex_registry() -> SchemaRegistry:
         checker=lambda ctx: True, elaborator="elab-AuxiliaryFunction",
         soundness_theorem="Transform-AuxiliaryFunction", is_transform=True,
         trust=TrustRecord())
-    reg.promote("AuxiliaryFunction", kernel_verified=True)
+    reg.promote("AuxiliaryFunction", decision=TrustDecision(
+        TrustStatus.KERNEL_VERIFIED, "registered kernel artifact",
+        artifact_ref="lean://schema/AuxiliaryFunction"))
     return reg
 
 
