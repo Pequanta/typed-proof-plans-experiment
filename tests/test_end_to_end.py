@@ -18,6 +18,8 @@ from tpps.adapters.extract import (ExtractedNode, accept, build_candidate,
                                    semantic_review)
 from tpps.adapters.kernel import KernelInterface
 from tpps.core.plan import Plan
+from tpps.core.schema import TrustStatus
+from tpps.core.trust import TrustDecision
 from tpps.adapters.render import Register, lint_rendered, render
 from tpps.core.stmt import Shape, Var
 from tpps.adapters.store import MockStore
@@ -40,7 +42,9 @@ def test_rewriting_induction_lifecycle():
     induced = theorem6_completion()
     assert "Compress(plan-a, plan-b)" in induced.provenance
     reg.register(induced.schema)
-    reg.promote(induced.schema.id, kernel_verified=True)
+    reg.promote(induced.schema.id, decision=TrustDecision(
+        TrustStatus.KERNEL_VERIFIED, "test artifact",
+        artifact_ref=f"test://{induced.schema.id}"))
 
     failure = plan_c_failure()
     assert failure.failed_condition == "no-remove"
@@ -48,7 +52,9 @@ def test_rewriting_induction_lifecycle():
 
     corrected = one_way_delete_schema()
     reg.register(corrected)
-    reg.promote(corrected.id, kernel_verified=True)
+    reg.promote(corrected.id, decision=TrustDecision(
+        TrustStatus.KERNEL_VERIFIED, "test artifact",
+        artifact_ref=f"test://{corrected.id}"))
     assert reg.usable_in_committed(corrected.id)
 
 
@@ -65,11 +71,11 @@ def test_evidence_closure_drives_render_and_commit():
         [conjoin([Evidence(reviewed=Reviewed.INDEPENDENT),
                   Evidence(formal=Formal.KERNEL, kernel_system="lean4+mathlib",
                            env_hash="h", reviewed=Reviewed.TWO_INDEPENDENT)])])
-    store.set("confluent", target_mu)
-    assert is_closed(store.mus["confluent"], requirement)
+    store.set("terminates", target_mu)
+    assert is_closed(store.mus["terminates"], requirement)
 
-    plan.stmts["confluent"].evidence = target_mu
-    text = render(plan, "confluent", requirement)  # closed → textbook by default
+    plan.stmts["terminates"].evidence = target_mu
+    text = render(plan, "terminates", requirement)  # closed → textbook by default
     assert "Status of" not in text
     assert lint_rendered(text, plan) == []
 
@@ -145,10 +151,10 @@ def test_complex_analysis_prose_roundtrip():
 def test_bypass_drift_recorded_not_silently_accepted():
     """Set/multiset drift lands as an explicit cast with blame attached."""
     plan = RW.strategy_independence_cast_plan()
-    inst = plan.insts["cast-Equiv-Equiv"]
-    assert inst.schema_ref == "Bypass"
-    assert inst.obligations, "drift must leave the implication obligation open"
-    assert "worker-attempt-7" in inst.provenance.producing_attempt
+    transform = plan.transforms[-1]
+    assert transform.kind == "Bypass"
+    assert transform.obligations, "drift must leave the implication obligation open"
+    assert "worker-attempt-7" in transform.provenance.producing_attempt
     # The cast target can never outrank its open obligation.
     from tpps.reasoning.transform import cast_evidence
     capped = cast_evidence(

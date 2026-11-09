@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from tpps.core.plan import Plan, Provenance, StmtNode
+from tpps.core.plan import Layer, Plan, Provenance, StmtNode
 from tpps.core.stmt import Shape, Stmt
 
 
@@ -43,7 +43,8 @@ def build_candidate(plan_id: str, nodes: list[ExtractedNode]) -> CandidatePlan:
         plan.add_stmt(StmtNode(f"n{i}", Stmt(shape=n.shape),
                                provenance=Provenance(
                                    source_span=n.source_span,
-                                   extraction_confidence=n.extraction_confidence)))
+                                   extraction_confidence=n.extraction_confidence),
+                               layer=Layer.SPECULATIVE))
     return CandidatePlan(nodes, plan)
 
 
@@ -51,7 +52,7 @@ def semantic_review(candidate: CandidatePlan, flags: dict[str, str]) -> list[Sem
     """Semantic-consistency review.
 
     `flags` maps node id → suspected mistranslation kind (produced by a
-    reviewer/critic; the prototype treats the reviewer as an input). A
+    reviewer/critic; the reviewer is represented as an explicit input). A
     well-typed but mistranslated extraction is caught here, never accepted.
     """
     issues = []
